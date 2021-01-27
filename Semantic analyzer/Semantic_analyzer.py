@@ -17,7 +17,28 @@ numerals = {"первый": "1",
             "седьмой": "7", 
             "восьмой": "8", 
             "девятый": "9", 
-            "десятый": "10"}
+            "десятый": "10",
+            "один": "1",
+            "два": "2",
+            "три": "3",
+            "четыре": "4",
+            "пять": "5",
+            "шесть": "6",
+            "семь": "7",
+            "восемь": "8",
+            "девять": "9",
+            "десять": "10"}
+
+fromQuantityToOrdinal = { "один": "первый",
+        "два": "второй",
+        "три": "третий",
+        "четыре": "четвертый",
+        "пять": "пятый",
+        "шесть": "шестой",
+        "семь": "седьмой",
+        "восемь": "восьмой",
+        "девять": "девятый",
+        "десять": "десятый"}
 
 #Сбор конструкций на основе числительных и соответствующих им существительных
 def createConstruction(sent, numrIndex, nounIndex, nounCase = "None"): #sent - список слов
@@ -50,7 +71,7 @@ def createConstruction(sent, numrIndex, nounIndex, nounCase = "None"): #sent - �
 def isNumr(word):
     morph = MorphAnalyzer()
     p = morph.parse(word)[0]
-    return p.tag.POS == "ADJF" and p.normal_form in numerals.keys()
+    return p.tag.POS == "ADJF" and p.normal_form in numerals.keys() or p.tag.POS == "NUMR"
 
 def findLastNoun(sent, indexToStart): #sent - список слов
     morph = MorphAnalyzer()
@@ -80,58 +101,185 @@ def isSubject(word):
     p = morph.parse(word)[0]
     return p.tag.POS == "VERB" or p.tag.POS == "PRTS" or p.tag.POS == "PRTF"
 
+#Возвращает фрагмент предложения в виде списка слов
+def extractCurrentFragment(fullSent, insideFragmentIndex): #fullSent - список слов
+    fragment = []
+    i = insideFragmentIndex
+    while fullSent[i] != "," and i >= 0: #Собираем первую часть фрагмента до позиции insideFragmentIndex
+        fragment.insert(0,fullSent[i])
+        i -= 1
+    i = insideFragmentIndex + 1
+    while i < len(fullSent) and fullSent[i] != "." and fullSent[i] != ",":
+        fragment.append(fullSent[i])
+        i += 1
+    return fragment
+
+#Возвращает существительное, соответствующее числительному, имеющему индекс numrIndex
+def findCorrespondingNoun(sent, numrIndex): #sent - предложение, представленное в виде списка слов
+    morph = MorphAnalyzer()
+    #Рассматриваем случай, когда существительное опущено из-за того, что данное числительное является однородным членом
+    if numrIndex+1 != len(sent) and (sent[numrIndex+1] == "и" or sent[numrIndex+1] == ","):  
+        #Ищем существительное после числительного
+        for i in range(numrIndex + 1, len(sent)): 
+            curWordParse = morph.parse(sent[i])[0]
+            if curWordParse.tag.POS == "NOUN":
+                return sent[i]
+    #Ищем существительное перед числительным
+    for i in range(numrIndex-1, -1, -1):
+        curWordParse = morph.parse(sent[i])[0]
+        if curWordParse.tag.POS == "NOUN":
+            return sent[i]
+
+#Возвращает фрагменты предложения sent, идущие до и после фрагмента separatingFragment
+def divideSentence(sent, separatingFragment): #sent и separatingFragment - списки слов
+    beforePart = []
+    afterPart = []
+    middlePart = []
+    fragmentIndex = 0
+
+    for i in range(len(sent)):
+        if fragmentIndex < len(separatingFragment) and sent[i] != separatingFragment[fragmentIndex]: #Слово находится до фрагмента
+            beforePart.extend(middlePart)
+            beforePart.append(sent[i])
+            fragmentIndex = 0
+        elif fragmentIndex == len(separatingFragment): #Слово находится после фрагмента
+            afterPart.append(sent[i])
+        else: #Слово находится внутри фрагмента
+            middlePart.append(sent[i])
+            fragmentIndex += 1
+
+    return beforePart, afterPart
+
+#Стандартизирует предложение, включающее конструкцию формата "...вершина под номером..."
+def proccessSentWithWordNumber(sent): #sent - список слов
+    #Находим фрагмент предложения, в котором находится слово "номер"
+    morph = MorphAnalyzer()
+    fragment = []
+    numberWordIndex = int()
+    for i in range(len(sent)):
+        if morph.parse(sent[i])[0].normal_form == "номер":
+            fragment = extractCurrentFragment(sent, i)
+            numberWordIndex = i
+            break
+
+    #Находим в данном фрагменте числительные
+    numrs = []
+    for i in range(len(fragment)):
+        if isNumr(fragment[i]):
+            numrParse = morph.parse(fromQuantityToOrdinal[fragment[i]])[0]
+            numrs.append(numrParse.inflect({"femn"}).word)
+
+    #Строим конструкции вида "Первая вершина", "Вторая вершина" и т.д. из имеющихся числительных
+    constructions = [] #Список конструкций, где каждая конструкция - это список строк
+    vertexParse = morph.parse("вершина")[0]
+    for numr in numrs:
+        curConstr = [numr]
+        if numberWordIndex > 0 and (sent[numberWordIndex-1] == "с" or sent[numberWordIndex-1] == "между"): #Проверяем, не нужно ли поставить существительное творительный падеж
+            curConstr.append(vertexParse.inflect({"ablt"}).word)
+        else:
+            curConstr.append(vertexParse.inflect({morph.parse(numr)[0].tag.case}).word) #Ставим существительное в форму, соответствующую
+                                                                                                                         #форме числительного
+        constructions.append(curConstr)
+
+    #Записываем часть фрагмента, предшествующую "вершине с номером"
+    resultFrag = []
+    i = int()
+    for i in range(len(fragment)):
+        if morph.parse(fragment[i])[0].normal_form == "вершина":
+            break;
+        resultFrag.append(fragment[i])
+    
+    #Заменяем числительные соответствующими конструкциями
+    for j in range(i, len(fragment)):
+        if morph.parse(fragment[j])[0].normal_form == "вершина" or fragment[j] == "с" \
+        or morph.parse(fragment[j])[0].normal_form == "номер":
+            continue
+
+        if not isNumr(fragment[j]):
+            resultFrag.append(fragment[j])
+            continue
+
+        resultFrag.extend(constructions[0])
+        constructions.remove(constructions[0])
+
+    beforeProccessedFrag, afterProccessedFrag = divideSentence(sent, fragment)
+
+    return beforeProccessedFrag + resultFrag + afterProccessedFrag
+
 def insertNounsAfterNumrs(sents): #sents - список предложений, где каждое предложение - список слов
     resultText = [] #Результирующий текст представим в виде списка предложений, где каждое предложение - это список слов
     morph = MorphAnalyzer()
     for sent in sents:
+        currentSentence = sent.copy()
         indexToCont = -1 #Вспомогательный индекс для пропуска уже обработанных слов
         for i in range(len(sent)):
+            if i >= len(currentSentence):
+                break
             if i < indexToCont:
                 continue
-            p = morph.parse(sent[i])[0] #Ищем числительные
-            if not isNumr(sent[i]): #Если текущее слово - не числительное
-                resultText.append(sent[i]) #добавляем его в результирующий список без изменений
+
+             #Обрабатываем случай, когда в предложении есть конструкции формата "...вершина под номером..."
+            if includesWord(currentSentence, "номер"):
+                currentSentence = proccessSentWithWordNumber(currentSentence)
+                resultText.extend(currentSentence)
+                break
+
+
+            p = morph.parse(currentSentence[i])[0] #Ищем числительные
+            if not isNumr(currentSentence[i]): #Если текущее слово - не числительное
+                resultText.append(currentSentence[i]) #добавляем его в результирующий список без изменений
                 continue
 
-            nextWordParse = morph.parse(sent[i])[0]
-            if i+1 != len(sent):
-                nextWordParse = morph.parse(sent[i+1])[0]
+            #Если нашли-таки числительное, то ищем соответствующее ему существительное
+
+            #Обрабатываем случай, когда числительное обозначает длину дуги
+            if currentSentence[i-1] == "-" or currentSentence[i-1] == "равна":
+                resultText.append(currentSentence[i])
+                continue
+
+            nextWordParse = morph.parse(currentSentence[i])[0]
+            if i+1 != len(currentSentence):
+                nextWordParse = morph.parse(currentSentence[i+1])[0]
             indexToCont = i #Индекс, с которого продолжим обработку
+
             #Обрабатываем случай с однородными числительными
-            nextNextWordParse = morph.parse(sent[i])[0]
-            if (i+2 < len(sent)):
-                nextNextWordParse = morph.parse(sent[i+2])[0]
-            if i+1 != len(sent) and ((sent[i+1] == "и" or sent[i+1] == ",") and i+2 != len(sent) and isNumr(sent[i+2]) and matchInGNC(p, nextNextWordParse)):
+            nextNextWordParse = morph.parse(currentSentence[i])[0]
+            if (i+2 < len(currentSentence)):
+                nextNextWordParse = morph.parse(currentSentence[i+2])[0]
+            if i+1 != len(currentSentence) and ((currentSentence[i+1] == "и" or currentSentence[i+1] == ",") and i+2 != len(currentSentence) and isNumr(currentSentence[i+2]) \
+                and matchInGNC(p, nextNextWordParse)):
                 constructs = [] #Составляем список конструкций формата [["Первая", "вершина"], ["Вторая", вершина"] и т.д.]
                 curConstr = []
                 j = int() #Индекс существительного
                 k = int() #Идекс ближайшего знака препинания
                 nounCase = "None" #Падеж однородных членов
-                for j in range(i+2, len(sent)): #Ищем существительное
-                    curWordParse = morph.parse(sent[j])[0]
-                    if curWordParse.tag.POS == "NOUN": #Если нашли существительное
-                        curConstr.append(sent[i])
-                        if i > 0 and (sent[i-1] == "с" or sent[i-1] == "между"): #Проверяем, не нужно ли поставить существительное творительный падеж
-                            curConstr.append(curWordParse.inflect({"ablt", p.tag.gender, p.tag.number}).word)
-                            nounCase = "ablt"
+                noun = findCorrespondingNoun(currentSentence, i)
+                nounParse = morph.parse(noun)[0]
+          
+                curConstr.append(currentSentence[i])
+                if i > 0 and (currentSentence[i-1] == "с" or currentSentence[i-1] == "между"): #Проверяем, не нужно ли поставить существительное творительный падеж
+                    curConstr.append(nounParse.inflect({"ablt", p.tag.gender, p.tag.number}).word)
+                    nounCase = "ablt"
+                else:
+                    curConstr.append(nounParse.inflect({p.tag.case, p.tag.gender, p.tag.number}).word) #Ставим существительное в форму, соответствующую форме числительного
+
+                #Проверяем, нужно ли вставлять в текущую конструкцию что-то, кроме существительного
+                curFrag = extractCurrentFragment(currentSentence, i)
+                if not includesWord(curFrag, "между"):
+                    for k in range(j+1, len(currentSentence)): #Собираем все слова до ближайшего знака препинания или предлога "и"
+                        if currentSentence[k] in string.punctuation or currentSentence[k] == "и":
+                            break
+                        if isSubject(currentSentence[k]):
+                            subjParse = morph.parse(currentSentence[k])[0]
+                            curConstr.append(subjParse.inflect({p.tag.case, p.tag.gender, p.tag.number}).word)
                         else:
-                            curConstr.append(curWordParse.inflect({p.tag.case, p.tag.gender, p.tag.number}).word) #Ставим существительное в форму, 
-                                                                                                                  #соответствующую форме 
-                                                                                                                  #числительного
-                        for k in range(j+1, len(sent)): #Собираем все слова до ближайшего знака препинания или предлога "и"
-                            if sent[k] in string.punctuation or sent[k] == "и":
-                                break
-                            if isSubject(sent[k]):
-                                subjParse = morph.parse(sent[k])[0]
-                                curConstr.append(subjParse.inflect({p.tag.case, p.tag.gender, p.tag.number}).word)
-                            else:
-                                curConstr.append(sent[k])
-                        constructs.append(curConstr)
-                        break #Выходим из цикла, запоминаем индекс существительного
+                            curConstr.append(currentSentence[k])
+                constructs.append(curConstr)
+                
                 for l in range(i+2, j): #Собираем остальные конструкции
-                    parse = morph.parse(sent[l])[0]
-                    if (isNumr(sent[l])):
-                        constructs.append(createConstruction(sent, l, j, nounCase))
+                    parse = morph.parse(currentSentence[l])[0]
+                    if (isNumr(currentSentence[l])):
+                        constructs.append(createConstruction(currentSentence, l, j, nounCase))
                 for c in range(len(constructs)):
                     resultText.extend(constructs[c])
                     if c != len(constructs) - 1:
@@ -139,17 +287,18 @@ def insertNounsAfterNumrs(sents): #sents - список предложений, 
                 indexToCont = k
 
             #Обрабатываем случай, когда существительное опущено
-            elif i+1 != len(sent) and nextWordParse.tag.POS != "NOUN":
-                noun = findLastNoun(sent, i-1) 
-                resultText.append(sent[i])
+            elif i+1 != len(currentSentence) and nextWordParse.tag.POS != "NOUN":
+                noun = findLastNoun(currentSentence, i-1) 
+                resultText.append(currentSentence[i])
                 if noun != "":
                     nounParse = morph.parse(noun)[0]
-                    if i > 0 and (sent[i-1] == "с" or sent[i-1] == "между"): #Проверяем, не нужно ли поставить существительное творительный падеж
+                    if i > 0 and (currentSentence[i-1] == "с" or currentSentence[i-1] == "между"): #Проверяем, не нужно ли поставить существительное творительный падеж
                         resultText.append(nounParse.inflect({p.tag.number, "ablt"}).word)
                     else:
                         resultText.append(nounParse.inflect({p.tag.number, p.tag.case}).word)
             else:
-                resultText.append(sent[i])
+                resultText.append(currentSentence[i])
+
 
     return groupIntoSentences(resultText) 
 
@@ -233,8 +382,7 @@ def divideDifficultSentence(sent): #sent - список слов
         if sent[i] == ".": #Обрабатываем случа, когда было передано простое предложение
             return [sent]
 
-
-def divivdeIntoSimpleSentences(text): #text = [["Первое", "предложение", "."], ["Второе", "предложение", "."], и т. д.]
+def divideIntoSimpleSentences(text): #text = [["Первое", "предложение", "."], ["Второе", "предложение", "."], и т. д.]
     resultText = []
     for sent in text:
         if predicateCount(sent) <= 1: #Если в предложении не больше одного сказуемого
@@ -253,7 +401,7 @@ def standardizeText(text): #text - переменная типа string
 
     t2 = replaceNumrsWithNumbers(t1)
 
-    t3 = divivdeIntoSimpleSentences(t2)
+    t3 = divideIntoSimpleSentences(t2)
 
     return t3
 
@@ -290,7 +438,7 @@ def extractData(standardizedText): #standardizedText - стандартизир�
         while numInd != -1:
             #Проверяем, что означает полученное число
             if numInd < len(sent) - 1:
-                if sent[numInd+1].lower() == "вершин" and includesWord(sent, "граф"): #Количество вершин в графе
+                if (sent[numInd+1].lower() == "вершин" or sent[numInd+1].lower() == "вершины") and includesWord(sent, "граф"): #Количество вершин в графе
                     result["dim"] = int(sent[numInd])
                 elif sent[numInd+1].lower() == "вершина" and (includesWord(sent, "соединить") or includesWord(sent, "связать")) and findNumber(sent[sliceStartIndex:]) != -1: #Наличие ребра
                     otherVertNum = findNumber(sent[sliceStartIndex:])
